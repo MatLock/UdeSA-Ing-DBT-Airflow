@@ -12,7 +12,7 @@ from pathlib import Path
 import pendulum
 from airflow import DAG
 from airflow.exceptions import AirflowException
-from airflow.operators.python import PythonOperator
+from airflow.providers.standard.operators.python import PythonOperator
 
 # pylint: disable=import-error,wrong-import-position
 
