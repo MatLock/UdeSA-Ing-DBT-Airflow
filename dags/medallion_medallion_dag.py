@@ -16,7 +16,6 @@ from airflow.providers.standard.operators.python import PythonOperator
 
 # pylint: disable=import-error,wrong-import-position
 
-
 BASE_DIR = Path(__file__).resolve().parents[1]
 if str(BASE_DIR) not in sys.path:
     sys.path.append(str(BASE_DIR))
@@ -50,12 +49,19 @@ def _build_env(ds_nodash: str) -> dict[str, str]:
 def _run_dbt_command(command: str, ds_nodash: str) -> subprocess.CompletedProcess:
     """Execute a dbt command and return the completed process."""
     env = _build_env(ds_nodash)
+    # Build vars JSON to pass to dbt
+    dbt_vars = json.dumps({
+        "clean_dir": str(CLEAN_DIR),
+        "ds_nodash": ds_nodash
+    })
     return subprocess.run(
         [
             "dbt",
             command,
             "--project-dir",
             str(DBT_DIR),
+            "--vars",
+            dbt_vars,
         ],
         cwd=DBT_DIR,
         env=env,
