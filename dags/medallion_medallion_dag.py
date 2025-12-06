@@ -65,9 +65,59 @@ def _run_dbt_command(command: str, ds_nodash: str) -> subprocess.CompletedProces
     )
 
 
-# TODO: Definir las funciones necesarias para cada etapa del pipeline
-#  (bronze, silver, gold) usando las funciones de transformación y
-#  los comandos de dbt.
+def bronze_clean_task(ds_nodash: str, **kwargs) -> None:
+    """Bronze layer: Read raw CSV and clean it to parquet."""
+    execution_date = datetime.strptime(ds_nodash, "%Y%m%d").date()
+    output_path = clean_daily_transactions(
+        execution_date=execution_date,
+        raw_dir=RAW_DIR,
+        clean_dir=CLEAN_DIR,
+    )
+    print(f"Bronze layer: Created clean parquet at {output_path}")
+
+
+def silver_dbt_run_task(ds_nodash: str, **kwargs) -> None:
+    """Silver layer: Run dbt models to load data into DuckDB."""
+    result = _run_dbt_command("run", ds_nodash)
+    print(f"dbt run stdout:\n{result.stdout}")
+    if result.stderr:
+        print(f"dbt run stderr:\n{result.stderr}")
+    if result.returncode != 0:
+        raise AirflowException(f"dbt run failed with exit code {result.returncode}")
+    print("Silver layer: dbt run completed successfully")
+
+
+def gold_dbt_tests_task(ds_nodash: str, **kwargs) -> None:
+    """Gold layer: Run dbt tests and write quality results to JSON."""
+    QUALITY_DIR.mkdir(parents=True, exist_ok=True)
+    result = _run_dbt_command("test", ds_nodash)
+    
+    # Determine status based on return code
+    status = "passed" if result.returncode == 0 else "failed"
+    
+    # Write quality results to JSON file
+    quality_result = {
+        "ds_nodash": ds_nodash,
+        "status": status,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
+    
+    output_file = QUALITY_DIR / f"dq_results_{ds_nodash}.json"
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(quality_result, f, indent=2)
+    
+    print(f"Gold layer: Data quality results written to {output_file}")
+    print(f"dbt test stdout:\n{result.stdout}")
+    if result.stderr:
+        print(f"dbt test stderr:\n{result.stderr}")
+    
+    # Raise exception if tests failed (after writing results)
+    if result.returncode != 0:
+        raise AirflowException(
+            f"dbt test failed with exit code {result.returncode}. "
+            f"Results saved to {output_file}"
+        )
 
 
 def build_dag() -> DAG:
@@ -81,20 +131,26 @@ def build_dag() -> DAG:
         max_active_runs=1,
     ) as medallion_dag:
 
+        bronze_clean = PythonOperator(
+            task_id="bronze_clean",
+            python_callable=bronze_clean_task,
+            op_kwargs={"ds_nodash": "{{ ds_nodash }}"},
+        )
 
-        # TODO:
-        # * Agregar las tasks necesarias del pipeline para completar lo pedido por el enunciado.
-        # * Usar PythonOperator con el argumento op_kwargs para pasar ds_nodash a las funciones.
-        #   De modo que cada task pueda trabajar con la fecha de ejecución correspondiente.
-        # Recomendaciones:
-        #  * Pasar el argumento ds_nodash a las funciones definidas arriba.
-        #    ds_nodash contiene la fecha de ejecución en formato YYYYMMDD sin guiones.
-        #    Utilizarlo para que cada task procese los datos del dia correcto y los archivos
-        #    de salida tengan nombres únicos por fecha.
-        #  * Asegurarse de que los paths usados en las funciones sean relativos a BASE_DIR.
-        #  * Usar las funciones definidas arriba para cada etapa del pipeline.
+        silver_dbt_run = PythonOperator(
+            task_id="silver_dbt_run",
+            python_callable=silver_dbt_run_task,
+            op_kwargs={"ds_nodash": "{{ ds_nodash }}"},
+        )
 
+        gold_dbt_tests = PythonOperator(
+            task_id="gold_dbt_tests",
+            python_callable=gold_dbt_tests_task,
+            op_kwargs={"ds_nodash": "{{ ds_nodash }}"},
+        )
 
+        # Define task dependencies: bronze -> silver -> gold
+        bronze_clean >> silver_dbt_run >> gold_dbt_tests
 
     return medallion_dag
 
