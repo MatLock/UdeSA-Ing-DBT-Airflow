@@ -35,3 +35,4 @@ models:
         description: "Date component derived from transaction_ts for partitioning/grouping."
         tests:
           - not_null
+          - date_bigger_than_2025
